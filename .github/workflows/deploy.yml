@@ -1,0 +1,77 @@
+name: Deploy
+
+#on:
+#  push:
+#    branches:
+#      - main
+#    paths-ignore:
+#      - '.gitignore'
+#      - LICENSE
+#      - 'README.md'
+
+jobs:
+  build-and-deploy:
+    name: Build and Deploy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@master
+      - name: Docker login
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ secrets.GH_USERNAME }}
+          password: ${{ secrets.GH_PWD }}
+      - name: Configure cert
+        run: |
+          mkdir ./certs
+          echo "$CERT_PEM" | base64 --decode > ./certs/chenyifaer.com.pem
+          echo "$CERT_KEY" | base64 --decode > ./certs/chenyifaer.com.key
+          echo "$PERSONAL_CERT_PEM" | base64 --decode > ./certs/kjxbyz.com.pem
+          echo "$PERSONAL_CERT_KEY" | base64 --decode > ./certs/kjxbyz.com.key
+          echo "$DEV_CERT_PEM" | base64 --decode > ./certs/dev.chenyifaer.com.pem
+          echo "$DEV_CERT_KEY" | base64 --decode > ./certs/dev.chenyifaer.com.key
+          echo "$STG_CERT_PEM" | base64 --decode > ./certs/stg.chenyifaer.com.pem
+          echo "$STG_CERT_KEY" | base64 --decode > ./certs/stg.chenyifaer.com.key
+        env:
+          CERT_PEM: ${{ secrets.CERT_PEM }}
+          CERT_KEY: ${{ secrets.CERT_KEY }}
+          PERSONAL_CERT_PEM: ${{ secrets.PERSONAL_CERT_PEM }}
+          PERSONAL_CERT_KEY: ${{ secrets.PERSONAL_CERT_KEY }}
+          DEV_CERT_PEM: ${{ secrets.DEV_CERT_PEM }}
+          DEV_CERT_KEY: ${{ secrets.DEV_CERT_KEY }}
+          STG_CERT_PEM: ${{ secrets.STG_CERT_PEM }}
+          STG_CERT_KEY: ${{ secrets.STG_CERT_KEY }}
+      - name: Set outputs
+        id: vars
+        run: echo "sha_short=$(git rev-parse --short=8 HEAD)" >> $GITHUB_OUTPUT
+      - name: Check outputs
+        run: echo ${{ steps.vars.outputs.sha_short }}
+      - name: Docker build & push
+        run: |
+          docker build . -t ghcr.io/${{ github.repository }}:${{ steps.vars.outputs.sha_short }}
+          docker push ghcr.io/${{ github.repository }}:${{ steps.vars.outputs.sha_short }}
+
+      - name: deploy to ecs
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.KEY }}
+          port: ${{ secrets.PORT }}
+          script: |
+            docker pull ghcr.io/${{ github.repository }}:${{ steps.vars.outputs.sha_short }}
+            image_id=$(docker ps -q)
+            if [ $image_id ]; then
+              echo "🟩 Stopping image $image_id"
+              docker stop $image_id
+            fi
+            if [ ! -d "/logs/sentinel" ]; then
+              echo "🟩 Creating directory"
+              mkdir -p /logs/sentinel;
+            fi
+            docker run -p 80:80 -p 443:443 -v /logs/sentinel:/logs/sentinel -d ghcr.io/${{ github.repository }}:${{ steps.vars.outputs.sha_short }}
+
+      - name: Clean up
+        if: ${{ always() }}
+        run: |
+          rm -f ~/.ssh/id_rsa
