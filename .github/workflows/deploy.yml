@@ -3,7 +3,7 @@ name: Deploy
 on:
   push:
     tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+\+[0-9]+'
+      - '[0-9]+.[0-9]+.[0-9]+'
 
 jobs:
   build-and-deploy:
@@ -12,7 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Docker login
-        uses: docker/login-action@v2
+        uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ secrets.GH_USERNAME }}
@@ -37,37 +37,38 @@ jobs:
           DEV_CERT_KEY: ${{ secrets.DEV_CERT_KEY }}
           STG_CERT_PEM: ${{ secrets.STG_CERT_PEM }}
           STG_CERT_KEY: ${{ secrets.STG_CERT_KEY }}
-      - name: Set outputs
-        id: vars
-        run: echo "sha_short=$(git rev-parse --short=8 HEAD)" >> $GITHUB_OUTPUT
-      - name: Check outputs
-        run: echo ${{ steps.vars.outputs.sha_short }}
       - name: Docker build & push
         run: |
-          docker build . -t ghcr.io/${{ github.repository }}:${{ steps.vars.outputs.sha_short }}
-          docker push ghcr.io/${{ github.repository }}:${{ steps.vars.outputs.sha_short }}
+          docker build . -t ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+          docker push ghcr.io/${{ github.repository }}:${{ github.ref_name }}
 
-      - name: deploy to ecs
-        uses: appleboy/ssh-action@v1.0.0
+      - name: Release
+        uses: softprops/action-gh-release@v1
         with:
-          host: ${{ secrets.HOST }}
-          username: ${{ secrets.USERNAME }}
-          key: ${{ secrets.KEY }}
-          port: ${{ secrets.PORT }}
-          script: |
-            docker pull ghcr.io/${{ github.repository }}:${{ steps.vars.outputs.sha_short }}
-            image_id=$(docker ps -q)
-            if [ $image_id ]; then
-              echo "🟩 Stopping image $image_id"
-              docker stop $image_id
-            fi
-            if [ ! -d "/logs/sentinel" ]; then
-              echo "🟩 Creating directory"
-              mkdir -p /logs/sentinel;
-            fi
-            docker run -p 80:80 -p 443:443 -v /logs/sentinel:/logs/sentinel -d ghcr.io/${{ github.repository }}:${{ steps.vars.outputs.sha_short }}
+          name: v${{ github.ref_name }}
+          token: ${{ secrets.GH_PWD }}
 
-      - name: Clean up
-        if: ${{ always() }}
-        run: |
-          rm -f ~/.ssh/id_rsa
+#      - name: deploy to ecs
+#        uses: appleboy/ssh-action@v1.0.0
+#        with:
+#          host: ${{ secrets.HOST }}
+#          username: ${{ secrets.USERNAME }}
+#          key: ${{ secrets.KEY }}
+#          port: ${{ secrets.PORT }}
+#          script: |
+#            docker pull ghcr.io/${{ github.repository }}:${{ steps.vars.outputs.sha_short }}
+#            image_id=$(docker ps -q)
+#            if [ $image_id ]; then
+#              echo "🟩 Stopping image $image_id"
+#              docker stop $image_id
+#            fi
+#            if [ ! -d "/logs/sentinel" ]; then
+#              echo "🟩 Creating directory"
+#              mkdir -p /logs/sentinel;
+#            fi
+#            docker run -p 80:80 -p 443:443 -v /logs/sentinel:/logs/sentinel -d ghcr.io/${{ github.repository }}:${{ steps.vars.outputs.sha_short }}
+#
+#      - name: Clean up
+#        if: ${{ always() }}
+#        run: |
+#          rm -f ~/.ssh/id_rsa
